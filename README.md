@@ -157,18 +157,6 @@ The server uses a per-socket timeout (example: 15s). If a client hangs, the serv
 
 ---
 
-## What to Show in the Hackathon
-
-1. Start server → show “Server started…” and (implicitly) UDP offers.
-2. Start client → show “Client started, listening for offer requests…”
-3. Play a few rounds → show cards, totals, and results printed each round.
-4. Trigger `dos` mode → show:
-   - client burst attempts
-   - server logs blocks (“RATE LIMIT …”)
-   - server remains responsive to normal clients afterward
-
----
-
 ## Notes on Compatibility
 
 - The server broadcasts:
