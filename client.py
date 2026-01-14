@@ -326,39 +326,28 @@ def prompt_rounds_and_mode() -> Tuple[int, bool]:
         print("Please enter a number 1-255 (or type 'dos').")
 
 def main() -> None:
-    client_name = input("Enter your team name (default: Blackijecky-Client): ").strip()
-    if not client_name:
-        client_name = "Blackijecky-Client"
+    client_name = input("Enter your team name (default: Blackijecky-Client): ").strip() or "Blackijecky-Client"
 
-    rounds, demo = prompt_rounds_and_mode()
-
-    print("Client started, listening for offer requests...")
     udp = open_udp_listener()
 
     try:
         while True:
+            rounds, demo = prompt_rounds_and_mode()   # ✅ ask every time
+
+            print("Client started, listening for offer requests...")
             offer = wait_for_offer(udp)
 
-            # If demo mode was armed, run it ONCE on the offered server, then ask rounds normally
             if demo:
                 dos_demo(offer.server_ip, offer.tcp_port, client_name)
-                rounds, demo = prompt_rounds_and_mode()
-                print("Client started, listening for offer requests...")
-                continue
+                continue  # ✅ goes back to "how many rounds..."
 
-            # Normal play session
             run_session(offer, rounds, client_name)
-
-            # Assignment says: close TCP and return to step 4 (listening)
-            print("Client started, listening for offer requests...")
+            # ✅ loop continues, so it asks rounds again
 
     except KeyboardInterrupt:
         print("\nClient exiting...")
     finally:
-        try:
-            udp.close()
-        except Exception:
-            pass
+        udp.close()
 
 
 if __name__ == "__main__":
