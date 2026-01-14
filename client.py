@@ -1,31 +1,25 @@
 # client.py
 import socket
-import struct
+from dataclasses import dataclass
+from typing import Tuple, List
 import time
 from dataclasses import dataclass
-from typing import Optional, Tuple, List
 
-# ----------------------------
-# Protocol constants (assignment)
-# ----------------------------
-MAGIC_COOKIE = 0xabcddcba
+from protocol import (
+    UDP_OFFER_PORT,
+    SERVER_PAYLOAD_SIZE,
 
-MSG_OFFER = 0x2
-MSG_REQUEST = 0x3
-MSG_PAYLOAD = 0x4
+    RES_NOT_OVER, RES_TIE, RES_LOSS, RES_WIN,
 
-UDP_OFFER_PORT = 13122
+    pack_request,
+    unpack_offer,
+    pack_client_payload,
+    unpack_server_payload,
 
-OFFER_SIZE = 4 + 1 + 2 + 32   # 39
-REQUEST_SIZE = 4 + 1 + 1 + 32 # 38
-CLIENT_PAYLOAD_SIZE = 4 + 1 + 5  # 10 ("Hittt" / "Stand")
-SERVER_PAYLOAD_SIZE = 4 + 1 + 1 + 2 + 1  # 9 (result + rank(u16) + suit(u8))
+    recv_exact,
+)
 
-# Results (match your server imports/values)
-RES_NOT_OVER = 0x0
-RES_TIE = 0x1
-RES_LOSS = 0x2
-RES_WIN = 0x3
+
 
 
 # ----------------------------
@@ -65,42 +59,18 @@ def fmt_card(rank: int, suit: int) -> str:
     return f"{rank_to_name(rank)} of {SUIT_NAMES.get(suit, '???')}"
 
 
-# ----------------------------
-# Helpers: pack/unpack
-# ----------------------------
-def pack_fixed_name(name: str) -> bytes:
-    b = name.encode("utf-8", errors="ignore")
-    if len(b) > 32:
-        b = b[:32]
-    return b.ljust(32, b"\x00")
-
-def unpack_fixed_name(b: bytes) -> str:
-    return b.split(b"\x00", 1)[0].decode("utf-8", errors="ignore")
-
-def pack_request(rounds: int, client_name: str) -> bytes:
-    # cookie(u32) + type(u8) + rounds(u8) + name(32)
-    return struct.pack("!IBB32s", MAGIC_COOKIE, MSG_REQUEST, rounds & 0xFF, pack_fixed_name(client_name))
-
-def pack_client_payload(decision: str) -> bytes:
-    # cookie(u32) + type(u8) + decision(5 bytes)
-    # decision must be exactly "Hittt" or "Stand"
-    if decision not in ("Hittt", "Stand"):
-        raise ValueError("decision must be 'Hittt' or 'Stand'")
-    return struct.pack("!IB5s", MAGIC_COOKIE, MSG_PAYLOAD, decision.encode("ascii"))
-
 @dataclass
 class Offer:
     tcp_port: int
     server_name: str
     server_ip: str
+@dataclass
+class OfferWithIP:
+    server_ip: str
+    tcp_port: int
+    server_name: str
 
-def unpack_offer(data: bytes, addr_ip: str) -> Optional[Offer]:
-    if len(data) < OFFER_SIZE:
-        return None
-    cookie, msg_type, tcp_port, raw_name = struct.unpack("!IBH32s", data[:OFFER_SIZE])
-    if cookie != MAGIC_COOKIE or msg_type != MSG_OFFER:
-        return None
-    return Offer(tcp_port=tcp_port, server_name=unpack_fixed_name(raw_name), server_ip=addr_ip)
+
 
 @dataclass
 class ServerPayload:
@@ -108,17 +78,6 @@ class ServerPayload:
     rank: int
     suit: int
 
-def unpack_server_payload(data: bytes) -> Optional[ServerPayload]:
-    if len(data) != SERVER_PAYLOAD_SIZE:
-        return None
-    cookie, msg_type, result, rank, suit = struct.unpack("!IBBHB", data)
-    if cookie != MAGIC_COOKIE or msg_type != MSG_PAYLOAD:
-        return None
-    # rank should be 1..13, suit 0..3 (HDCS)
-    if not (1 <= rank <= 13) or not (0 <= suit <= 3):
-        # still tolerate: return but mark? we'll reject to keep clean
-        return None
-    return ServerPayload(result=result, rank=rank, suit=suit)
 
 def recv_exact(sock: socket.socket, n: int) -> bytes:
     chunks = []
@@ -136,7 +95,7 @@ def recv_exact(sock: socket.socket, n: int) -> bytes:
 # Rate-limit demo easter egg
 # ----------------------------
 def dos_demo(server_ip: str, server_port: int, client_name: str,
-                    attempts: int = 500, delay: float = 0.01) -> None:
+                    attempts: int = 5000, delay: float = 0.01) -> None:
     """
     Demonstrates server-side connection rate limiting.
     We connect quickly many times, send an INVALID request (rounds=0),
@@ -269,7 +228,7 @@ def play_one_round(tcp: socket.socket, round_idx: int) -> RoundStats:
             return stats
 
 
-def run_session(server: Offer, rounds: int, client_name: str) -> None:
+def run_session(server: OfferWithIP, rounds: int, client_name: str) -> None:
     tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     tcp.settimeout(15.0)
     try:
@@ -329,21 +288,27 @@ def open_udp_listener() -> socket.socket:
     s.settimeout(2.0)
     return s
 
-def wait_for_offer(udp: socket.socket) -> Offer:
+def wait_for_offer(udp: socket.socket) -> OfferWithIP:
     while True:
         try:
             data, addr = udp.recvfrom(2048)
         except socket.timeout:
-            continue  # not busy-waiting; timeout keeps it responsive
-        offer = unpack_offer(data, addr[0])
-        if offer:
-            print(f"Received offer from {offer.server_ip} (server '{offer.server_name}', tcp_port={offer.tcp_port})")
-            return offer
+            continue  # not busy-waiting
+
+        try:
+            o = unpack_offer(data)  # protocol.py unpack_offer(data)
+        except Exception:
+            continue  # ignore garbage packets
+
+        offer = OfferWithIP(server_ip=addr[0], tcp_port=o.tcp_port, server_name=o.server_name)
+        print(f"Received offer from {offer.server_ip} (server '{offer.server_name}', tcp_port={offer.tcp_port})")
+        return offer
+
 
 def prompt_rounds_and_mode() -> Tuple[int, bool]:
     """
     Returns (rounds, run_rate_limit_demo).
-    Easter egg: type 'ratelimit' here.
+    Easter egg: type 'dos' here.
     """
     while True:
         raw = input("How many rounds do you want to play? (1-255): ").strip().lower()
@@ -358,7 +323,7 @@ def prompt_rounds_and_mode() -> Tuple[int, bool]:
                 return (rounds, False)
         except ValueError:
             pass
-        print("Please enter a number 1-255 (or type 'ratelimit').")
+        print("Please enter a number 1-255 (or type 'dos').")
 
 def main() -> None:
     client_name = input("Enter your team name (default: Blackijecky-Client): ").strip()
