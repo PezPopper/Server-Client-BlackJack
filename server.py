@@ -15,7 +15,7 @@ from protocol import (
 )
 from blackjack import new_shuffled_deck, RoundState, hand_total
 
-SERVER_NAME = "Blackijecky-Server"
+SERVER_NAME = "Protected-Casino"
 OFFER_INTERVAL_SEC = 1.0
 
 TCP_BACKLOG = 50
